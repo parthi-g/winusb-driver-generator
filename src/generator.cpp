@@ -30,6 +30,19 @@ generator_list_driverless_devices(struct wdi_device_info **result) {
 }
 
 static int
+generator_list_devices(struct wdi_device_info **result) {
+  struct wdi_options_create_list options_list = { 0 };
+
+  // Only enumerate devices without a driver
+  options_list.list_all = TRUE;
+
+  // Don't include USB hubs or Composite Parent devices
+  options_list.list_hubs = FALSE;
+
+  return wdi_create_list(result, &options_list);
+}
+
+static int
 generator_generate_winusb_inf(struct wdi_device_info *device,
                               const char * const name,
                               const char * const path) {
@@ -175,9 +188,99 @@ NAN_METHOD(associate) {
   info.GetReturnValue().SetUndefined();
 }
 
+
+
+NAN_METHOD(update) {
+  if (info.Length() != 3) {
+    return Nan::ThrowError("This function expects 3 arguments");
+  }
+
+  if (!info[0]->IsNumber()) {
+    return Nan::ThrowError("Product id must be a number");
+  }
+
+  if (!info[1]->IsNumber()) {
+    return Nan::ThrowError("Vendor id must be a number");
+  }
+
+  if (!info[2]->IsString()) {
+    return Nan::ThrowError("Description must be a string");
+  }
+
+  const uint16_t vendor = info[0]->Uint32Value();
+  const uint16_t product = info[1]->Uint32Value();
+
+  v8::String::Utf8Value description_v8(info[2]->ToString());
+  std::string description_string = std::string(*description_v8);
+  char *description = new char[description_string.length() + 1];
+
+  strcpy(description, description_string.c_str());
+
+  struct wdi_device_info *device_list_node;
+  struct wdi_device_info device = {
+    NULL,
+    vendor,
+    product,
+    FALSE,
+    0,
+    description,
+    NULL,
+    NULL,
+    NULL
+  };
+
+  bool matching_device_found = false;
+  int code = WDI_SUCCESS;
+  const char * const INF_NAME = "usb_device.inf";
+  const char * const INF_PATH = "usb_driver";
+
+  wdi_set_log_level(WDI_LOG_LEVEL_WARNING);
+
+  std::cout << "Extracting driver files" << std::endl;
+  code = generator_generate_winusb_inf(&device, INF_NAME, INF_PATH);
+  if (code != WDI_SUCCESS) {
+    return Nan::ThrowError(wdi_strerror(code));
+  }
+
+  std::cout << "Installing driver" << std::endl;
+  code = generator_list_devices(&device_list_node);
+  if (code == WDI_SUCCESS) {
+    for (; device_list_node != NULL
+         ; device_list_node = device_list_node->next) {
+      if (device_list_node->vid == vendor && device_list_node->pid == product) {
+        device.hardware_id = device_list_node->hardware_id;
+        device.device_id = device_list_node->device_id;
+        matching_device_found = true;
+        break;
+      }
+    }
+  } else if (code == WDI_ERROR_NO_DEVICE) {
+    matching_device_found = false;
+  } else {
+    return Nan::ThrowError(wdi_strerror(code));
+  }
+
+  code = generator_install_winusb_inf(&device, INF_NAME, INF_PATH);
+  if (code != WDI_SUCCESS) {
+    return Nan::ThrowError(wdi_strerror(code));
+  }
+
+  if (matching_device_found) {
+    code = wdi_destroy_list(device_list_node);
+    if (code != WDI_SUCCESS) {
+      return Nan::ThrowError(wdi_strerror(code));
+    }
+  }
+
+  delete [] description;
+  info.GetReturnValue().SetUndefined();
+}
+
 NAN_MODULE_INIT(GeneratorInit) {
   NAN_EXPORT(target, listDriverlessDevices);
   NAN_EXPORT(target, associate);
+  NAN_EXPORT(target, update);
+
 }
 
 NODE_MODULE(Generator, GeneratorInit)

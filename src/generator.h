@@ -34,5 +34,6 @@
 
 NAN_METHOD(hasDriver);
 NAN_METHOD(associate);
+NAN_METHOD(update);
 
 #endif  // SRC_GENERATOR_H_
